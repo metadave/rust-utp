@@ -534,6 +534,44 @@ impl UtpSocket {
         }
     }
 
+    #[cfg(windows)]
+    fn ignore_udp_error(e: &Error) -> bool {
+        // On Windows, the recv_from operation on the UDP socket may return the
+        // following errors, which are expected and should be ignored:
+        //
+        // - 10054 (WSAECONNRESET): Windows can send this error if a previous
+        //   send operation resulted in an ICMP Port Unreachable. And if it's a
+        //   loopback interface, it can know whether there is already another
+        //   end to communicate.
+        // - 10040 (WSAEMSGSIZE): This error was randomly appearing in a test
+        //   that I conducted. Not really sure why it's happening. The frequency
+        //   decreased when I increased the receive buffer size, but it was not
+        //   important to get a network up and running.
+        //
+        // Without these changes, it was impossible to get a relatively large
+        // network running without issues. By large I mean a test that might be
+        // too bursting for a single machine to run.
+        //
+        // More references:
+        //
+        // - http://stackoverflow.com/questions/30749423/is-winsock-error-10054-wsaeconnreset-normal-with-udp-to-from-localhost#comment49588739_30749423
+        // - https://github.com/maidsafe/crust/pull/454
+        const WSAECONNRESET: i32 = 10054;
+        const WSAEMSGSIZE: i32 = 10040;
+        match e.raw_os_error() {
+            Some(e) => match e {
+                WSAECONNRESET | WSAEMSGSIZE => true,
+                _ => false,
+            },
+            None => false,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn ignore_udp_error(_: &Error) -> bool {
+        false
+    }
+
     fn recv(&mut self, buf: &mut [u8], use_user_timeout: bool) -> Result<(usize, SocketAddr)> {
         let mut b = [0; BUF_SIZE + HEADER_SIZE];
         let now = SteadyTime::now();
@@ -609,6 +647,7 @@ impl UtpSocket {
                         self.retries += 1;
                     }
                 }
+                Err(ref e) if Self::ignore_udp_error(e) => (),
                 Err(e) => return Err(e),
             };
 
