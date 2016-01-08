@@ -10,7 +10,7 @@ pub const HEADER_SIZE: usize = 20;
 
 macro_rules! u8_to_unsigned_be {
     ($src:ident, $start:expr, $end:expr, $t:ty) => ({
-        (0 .. $end - $start + 1).rev().fold(0, |acc, i| acc | $src[$start+i] as $t << i * 8)
+        (0 .. $end - $start + 1).rev().fold(0, |acc, i| acc | $src[$start+i] as $t << (i * 8))
     })
 }
 
@@ -52,7 +52,7 @@ pub enum ParseError {
     InvalidExtensionLength,
     InvalidPacketLength,
     InvalidPacketType,
-    UnsupportedVersion
+    UnsupportedVersion,
 }
 
 impl fmt::Display for ParseError {
@@ -75,11 +75,11 @@ impl Error for ParseError {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum PacketType {
-    Data  = 0,
-    Fin   = 1,
+    Data = 0,
+    Fin = 1,
     State = 2,
     Reset = 3,
-    Syn   = 4,
+    Syn = 4,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -138,7 +138,7 @@ impl PacketHeader {
 
     /// Returns the packet header's length.
     pub fn len(&self) -> usize {
-        return HEADER_SIZE;
+        HEADER_SIZE
     }
 }
 
@@ -148,7 +148,7 @@ impl Deref for PacketHeader {
     /// Returns the packet header as a slice of bytes.
     fn deref(&self) -> &[u8] {
         let buf: &[u8; HEADER_SIZE] = unsafe { transmute(self) };
-        return &buf[..];
+        &buf[..]
     }
 }
 
@@ -174,7 +174,7 @@ impl Decodable for PacketHeader {
             2 => PacketType::State,
             3 => PacketType::Reset,
             4 => PacketType::Syn,
-            _ => return Err(ParseError::InvalidPacketType)
+            _ => return Err(ParseError::InvalidPacketType),
         };
 
         Ok(PacketHeader {
@@ -341,7 +341,7 @@ impl Encodable for Packet {
             buf.set_len(buf_len + self.payload.len());
         }
 
-        return buf;
+        buf
     }
 }
 
@@ -399,7 +399,9 @@ impl Decodable for Packet {
             payload = Vec::with_capacity(payload_length);
             unsafe {
                 use std::ptr;
-                ptr::copy(buf.as_ptr().offset(idx as isize), payload.as_mut_ptr(), payload_length);
+                ptr::copy(buf.as_ptr().offset(idx as isize),
+                          payload.as_mut_ptr(),
+                          payload_length);
                 payload.set_len(payload_length);
             }
         } else {
@@ -437,8 +439,8 @@ mod tests {
 
     #[test]
     fn test_packet_decode() {
-        let buf = [0x21, 0x00, 0x41, 0xa8, 0x99, 0x2f, 0xd0, 0x2a, 0x9f, 0x4a,
-                   0x26, 0x21, 0x00, 0x10, 0x00, 0x00, 0x3a, 0xf2, 0x6c, 0x79];
+        let buf = [0x21, 0x00, 0x41, 0xa8, 0x99, 0x2f, 0xd0, 0x2a, 0x9f, 0x4a, 0x26, 0x21, 0x00,
+                   0x10, 0x00, 0x00, 0x3a, 0xf2, 0x6c, 0x79];
         let pkt = Packet::from_bytes(&buf);
         assert!(pkt.is_ok());
         let pkt = pkt.unwrap();
@@ -457,9 +459,8 @@ mod tests {
 
     #[test]
     fn test_decode_packet_with_extension() {
-        let buf = [0x21, 0x01, 0x41, 0xa7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x05, 0xdc, 0xab, 0x53, 0x3a, 0xf5,
-                   0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
+        let buf = [0x21, 0x01, 0x41, 0xa7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x05, 0xdc, 0xab, 0x53, 0x3a, 0xf5, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
         let packet = Packet::from_bytes(&buf);
         assert!(packet.is_ok());
         let packet = packet.unwrap();
@@ -476,7 +477,7 @@ mod tests {
         assert!(packet.payload.is_empty());
         assert!(packet.extensions.len() == 1);
         assert!(packet.extensions[0].ty == ExtensionType::SelectiveAck);
-        assert!(packet.extensions[0].data == vec!(0, 0, 0, 0));
+        assert!(packet.extensions[0].data == vec![0, 0, 0, 0]);
         assert!(packet.extensions[0].len() == packet.extensions[0].data.len());
         assert!(packet.extensions[0].len() == 4);
         // Reversible
@@ -485,27 +486,25 @@ mod tests {
 
     #[test]
     fn test_packet_decode_with_missing_extension() {
-        let buf = [0x21, 0x01, 0x41, 0xa8, 0x99, 0x2f, 0xd0, 0x2a, 0x9f, 0x4a,
-                   0x26, 0x21, 0x00, 0x10, 0x00, 0x00, 0x3a, 0xf2, 0x6c, 0x79];
+        let buf = [0x21, 0x01, 0x41, 0xa8, 0x99, 0x2f, 0xd0, 0x2a, 0x9f, 0x4a, 0x26, 0x21, 0x00,
+                   0x10, 0x00, 0x00, 0x3a, 0xf2, 0x6c, 0x79];
         let pkt = Packet::from_bytes(&buf);
         assert!(pkt.is_err());
     }
 
     #[test]
     fn test_packet_decode_with_malformed_extension() {
-        let buf = [0x21, 0x01, 0x41, 0xa8, 0x99, 0x2f, 0xd0, 0x2a, 0x9f, 0x4a,
-                   0x26, 0x21, 0x00, 0x10, 0x00, 0x00, 0x3a, 0xf2, 0x6c, 0x79,
-                   0x00, 0x04, 0x00];
+        let buf = [0x21, 0x01, 0x41, 0xa8, 0x99, 0x2f, 0xd0, 0x2a, 0x9f, 0x4a, 0x26, 0x21, 0x00,
+                   0x10, 0x00, 0x00, 0x3a, 0xf2, 0x6c, 0x79, 0x00, 0x04, 0x00];
         let pkt = Packet::from_bytes(&buf);
         assert!(pkt.is_err());
     }
 
     #[test]
     fn test_decode_packet_with_unknown_extensions() {
-        let buf = [0x21, 0x01, 0x41, 0xa7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x05, 0xdc, 0xab, 0x53, 0x3a, 0xf5,
-                   0xff, 0x04, 0x00, 0x00, 0x00, 0x00, // Imaginary extension
-                   0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
+        let buf = [0x21, 0x01, 0x41, 0xa7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x05, 0xdc, 0xab, 0x53, 0x3a, 0xf5, 0xff, 0x04, 0x00, 0x00, 0x00,
+                   0x00 /* Imaginary extension */, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
         let packet = Packet::from_bytes(&buf);
         assert!(packet.is_ok());
         let packet = packet.unwrap();
@@ -521,7 +520,7 @@ mod tests {
         assert!(packet.payload.is_empty());
         assert!(packet.extensions.len() == 2);
         assert!(packet.extensions[0].ty == ExtensionType::SelectiveAck);
-        assert!(packet.extensions[0].data == vec!(0, 0, 0, 0));
+        assert!(packet.extensions[0].data == vec![0, 0, 0, 0]);
         assert!(packet.extensions[0].len() == packet.extensions[0].data.len());
         assert!(packet.extensions[0].len() == 4);
         // Reversible
@@ -544,10 +543,8 @@ mod tests {
         pkt.header.wnd_size = window_size.to_be();
         pkt.payload = payload.clone();
         let header = pkt.header;
-        let buf = [0x01, 0x00, 0x41, 0xa8, 0x00, 0xe9, 0x03, 0x89,
-                   0x65, 0xbf, 0x5d, 0xba, 0x00, 0x10, 0x00, 0x00,
-                   0x3a, 0xf2, 0x42, 0xc8, 0x48, 0x65, 0x6c, 0x6c,
-                   0x6f, 0x0a];
+        let buf = [0x01, 0x00, 0x41, 0xa8, 0x00, 0xe9, 0x03, 0x89, 0x65, 0xbf, 0x5d, 0xba, 0x00,
+                   0x10, 0x00, 0x00, 0x3a, 0xf2, 0x42, 0xc8, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x0a];
 
         assert_eq!(pkt.len(), buf.len());
         assert_eq!(pkt.len(), HEADER_SIZE + payload.len());
@@ -579,10 +576,8 @@ mod tests {
         pkt.header.wnd_size = window_size.to_be();
         pkt.payload = payload.clone();
         let header = pkt.header;
-        let buf = [0x01, 0x00, 0x41, 0xa8, 0x00, 0xe9, 0x03, 0x89,
-                   0x65, 0xbf, 0x5d, 0xba, 0x00, 0x10, 0x00, 0x00,
-                   0x3a, 0xf2, 0x42, 0xc8, 0x48, 0x65, 0x6c, 0x6c,
-                   0x6f, 0x0a];
+        let buf = [0x01, 0x00, 0x41, 0xa8, 0x00, 0xe9, 0x03, 0x89, 0x65, 0xbf, 0x5d, 0xba, 0x00,
+                   0x10, 0x00, 0x00, 0x3a, 0xf2, 0x42, 0xc8, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x0a];
 
         assert_eq!(pkt.len(), buf.len());
         assert_eq!(pkt.len(), HEADER_SIZE + payload.len());
@@ -602,7 +597,10 @@ mod tests {
     #[test]
     fn test_packet_encode_with_multiple_extensions() {
         let mut packet = Packet::new();
-        let extension = Extension { ty: ExtensionType::SelectiveAck, data: vec!(1, 2, 3, 4) };
+        let extension = Extension {
+            ty: ExtensionType::SelectiveAck,
+            data: vec![1, 2, 3, 4],
+        };
         packet.header.extension = extension.ty as u8;
         packet.extensions.push(extension.clone());
         packet.extensions.push(extension.clone());
@@ -620,15 +618,14 @@ mod tests {
         // Type of the next (third, non-existent) extension
         assert_eq!(bytes[HEADER_SIZE + 2 + extension.len()], 0);
         // Length of the second extension
-        assert_eq!(bytes[HEADER_SIZE + 2 + extension.len() + 1], extension.data.len() as u8);
+        assert_eq!(bytes[HEADER_SIZE + 2 + extension.len() + 1],
+                   extension.data.len() as u8);
     }
 
     #[test]
     fn test_reversible() {
-        let buf = [0x01, 0x00, 0x41, 0xa8, 0x00, 0xe9, 0x03, 0x89,
-                   0x65, 0xbf, 0x5d, 0xba, 0x00, 0x10, 0x00, 0x00,
-                   0x3a, 0xf2, 0x42, 0xc8, 0x48, 0x65, 0x6c, 0x6c,
-                   0x6f, 0x0a];
+        let buf = [0x01, 0x00, 0x41, 0xa8, 0x00, 0xe9, 0x03, 0x89, 0x65, 0xbf, 0x5d, 0xba, 0x00,
+                   0x10, 0x00, 0x00, 0x3a, 0xf2, 0x42, 0xc8, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x0a];
         assert_eq!(&Packet::from_bytes(&buf).unwrap().to_bytes()[..], &buf[..]);
     }
 
