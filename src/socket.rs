@@ -1675,7 +1675,7 @@ mod test {
         let sender_seq_nr = rx.recv().unwrap();
         let ack_nr = client.ack_nr;
         assert!(ack_nr != 0);
-        assert!(ack_nr == sender_seq_nr);
+        assert!(ack_nr.wrapping_add(1) == sender_seq_nr);
         assert!(client.close().is_ok());
 
         // The reply to both connect (SYN) and close (FIN) should be
@@ -1759,8 +1759,11 @@ mod test {
         assert!(response.ack_nr() == packet.seq_nr());
 
         // Responses with no payload should not increase the sequence number
+        // unless it's the State packet sent to acknowledge the Syn packet as
+        // explained at
+        // <http://www.bittorrent.org/beps/bep_0029.html#connection-setup>
         assert!(response.payload.is_empty());
-        assert!(response.seq_nr() == old_response.seq_nr());
+        assert!(response.seq_nr() == old_response.seq_nr().wrapping_add(1));
         // }
 
         // fn test_connection_teardown() {
