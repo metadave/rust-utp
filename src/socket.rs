@@ -2510,8 +2510,8 @@ mod test {
         });
 
         match UtpSocket::connect(server_addr) {
-            Err(ref e) if e.kind() == ErrorKind::ConnectionRefused => (), // OK
-            Err(e) => panic!("Expected ErrorKind::ConnectionRefused, got {:?}", e),
+            Err(ref e) if e.kind() == ErrorKind::TimedOut => (), // OK
+            Err(e) => panic!("Expected ErrorKind::TimedOut, got {:?}", e),
             Ok(_) => panic!("Expected Err, got Ok"),
         }
 
