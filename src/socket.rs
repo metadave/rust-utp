@@ -86,6 +86,15 @@ fn take_address<A: ToSocketAddrs>(addr: A) -> Result<SocketAddr> {
         .and_then(|mut it| it.next().ok_or(From::from(SocketError::InvalidAddress)))
 }
 
+fn unsafe_copy(src: &[u8], dst: &mut [u8]) -> usize {
+    let max_len = min(src.len(), dst.len());
+    unsafe {
+        use std::ptr::copy;
+        copy(src.as_ptr(), dst.as_mut_ptr(), max_len);
+    }
+    max_len
+}
+
 /// A structure that represents a uTP (Micro Transport Protocol) connection between a local socket
 /// and a remote socket.
 ///
@@ -167,6 +176,10 @@ pub struct UtpSocket {
     /// Data from the latest packet not yet returned in `recv_from`
     pending_data: Vec<u8>,
 
+    /// Another buffer of data to be returned in recv_from
+    /// this comes before pending_data
+    read_ready_data: Vec<u8>,
+
     /// Bytes in flight
     curr_window: u32,
 
@@ -244,6 +257,7 @@ impl UtpSocket {
             last_dropped: 0,
             rtt: 0,
             rtt_variance: 0,
+            read_ready_data: Vec::new(),
             pending_data: Vec::new(),
             curr_window: 0,
             remote_wnd_size: 0,
@@ -503,6 +517,12 @@ impl UtpSocket {
     /// Returns 0 bytes read after receiving a FIN packet when the remaining
     /// in-flight packets are consumed.
     pub fn recv_from(&mut self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        if self.read_ready_data.len() > 0 {
+            let len = unsafe_copy(&self.read_ready_data[..], buf);
+            self.read_ready_data.drain(..len);
+            return Ok((len, self.connected_to));
+        }
+
         let read = self.flush_incoming_buffer(buf);
 
         if read > 0 {
@@ -784,15 +804,6 @@ impl UtpSocket {
     /// slice `buf`, starting in position `start`.
     /// Returns the last written index.
     fn flush_incoming_buffer(&mut self, buf: &mut [u8]) -> usize {
-        fn unsafe_copy(src: &[u8], dst: &mut [u8]) -> usize {
-            let max_len = min(src.len(), dst.len());
-            unsafe {
-                use std::ptr::copy;
-                copy(src.as_ptr(), dst.as_mut_ptr(), max_len);
-            }
-            max_len
-        }
-
         // Return pending data from a partially read packet
         if !self.pending_data.is_empty() {
             let flushed = unsafe_copy(&self.pending_data[..], buf);
@@ -902,7 +913,8 @@ impl UtpSocket {
             debug!("self.duplicate_ack_count: {}", self.duplicate_ack_count);
             debug!("now_microseconds() - now = {}", now_microseconds() - now);
             let mut buf = [0; BUF_SIZE];
-            try!(self.recv(&mut buf, false));
+            let (read, _) = try!(self.recv(&mut buf, false));
+            self.read_ready_data.extend(&buf[..read]);
         }
         debug!("out: now_microseconds() - now = {}",
                now_microseconds() - now);
@@ -1607,31 +1619,38 @@ mod test {
         let peer2_port = iotry!(peer2_udp_socket.local_addr()).port();
         let peer2_addr = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), peer2_port);
 
-        let tx_buffer = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let cmp_buffer = tx_buffer.clone();
+        const BUF_LEN: u32 = 16777216;
+
+        let tx_buffer: Vec<u8> = (0..BUF_LEN).map(|_| rand::random::<u8>()).collect();
 
         let t = thread::spawn(move || {
             let mut peer1 = iotry!(UtpSocket::rendezvous_connect(peer1_udp_socket, peer2_addr));
             let mut sent_total = 0;
             while sent_total < tx_buffer.len() {
-                let sent = peer1.send_to(&tx_buffer[sent_total..]).unwrap();
+                let chunk_size = rand::random::<u16>() as usize + 1;
+                let slice_end = ::std::cmp::min(tx_buffer.len(), sent_total + chunk_size);
+                let sent = peer1.send_to(&tx_buffer[sent_total..slice_end]).unwrap();
                 sent_total += sent;
             }
             let r = peer1.flush();
             r.unwrap();
             let _ = peer1.close();
+            tx_buffer
         });
 
         let mut peer2 = iotry!(UtpSocket::rendezvous_connect(peer2_udp_socket, peer1_addr));
-        let mut rx_buffer = (0..cmp_buffer.len()).map(|_| 0).collect::<Vec<_>>();
+        let mut rx_buffer: Vec<u8> = (0..BUF_LEN).into_iter().map(|_| 0u8).collect();
         let mut received_total = 0;
-        while received_total < cmp_buffer.len() {
-            let (received, _) = peer2.recv_from(&mut rx_buffer[received_total..]).unwrap();
+        while received_total < rx_buffer.len() {
+            let chunk_size = rand::random::<u16>() as usize + 1;
+            ::std::thread::sleep(::std::time::Duration::from_millis(1));
+            let slice_end = ::std::cmp::min(rx_buffer.len(), received_total + chunk_size);
+            let (received, _) = peer2.recv_from(&mut rx_buffer[received_total..slice_end]).unwrap();
             received_total += received;
         }
-        assert_eq!(cmp_buffer, &rx_buffer[..]);
+        let tx_buffer = t.join().unwrap();
+        assert_eq!(tx_buffer, rx_buffer);
         let _ = peer2.close();
-        t.join().unwrap();
     }
 
     #[test]
