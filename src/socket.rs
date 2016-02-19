@@ -174,11 +174,11 @@ pub struct UtpSocket {
     rtt_variance: i32,
 
     /// Data from the latest packet not yet returned in `recv_from`
-    pending_data: Vec<u8>,
+    pending_data: VecDeque<u8>,
 
     /// Another buffer of data to be returned in recv_from
     /// this comes before pending_data
-    read_ready_data: Vec<u8>,
+    read_ready_data: VecDeque<u8>,
 
     /// Bytes in flight
     curr_window: u32,
@@ -257,8 +257,8 @@ impl UtpSocket {
             last_dropped: 0,
             rtt: 0,
             rtt_variance: 0,
-            read_ready_data: Vec::new(),
-            pending_data: Vec::new(),
+            read_ready_data: VecDeque::new(),
+            pending_data: VecDeque::new(),
             curr_window: 0,
             remote_wnd_size: 0,
             current_delays: Vec::new(),
@@ -517,10 +517,20 @@ impl UtpSocket {
     /// Returns 0 bytes read after receiving a FIN packet when the remaining
     /// in-flight packets are consumed.
     pub fn recv_from(&mut self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        if self.read_ready_data.len() > 0 {
-            let len = unsafe_copy(&self.read_ready_data[..], buf);
-            self.read_ready_data.drain(..len);
-            return Ok((len, self.connected_to));
+        let read = {
+            let (read_ready_0, read_ready_1) = self.read_ready_data.as_slices();
+            let mut read = 0;
+            if read_ready_0.len() > 0 {
+                read = unsafe_copy(read_ready_0, buf)
+            }
+            if read_ready_1.len() > 0 {
+                read += unsafe_copy(read_ready_1, &mut buf[read..])
+            }
+            read
+        };
+        if read > 0 {
+            self.read_ready_data.drain(..read);
+            return Ok((read, self.connected_to));
         }
 
         let read = self.flush_incoming_buffer(buf);
@@ -806,13 +816,23 @@ impl UtpSocket {
     fn flush_incoming_buffer(&mut self, buf: &mut [u8]) -> usize {
         // Return pending data from a partially read packet
         if !self.pending_data.is_empty() {
-            let flushed = unsafe_copy(&self.pending_data[..], buf);
+            let flushed = {
+                let (pending_0, pending_1) = self.pending_data.as_slices();
+                let mut flushed = 0;
+                if pending_0.len() > 0 {
+                    flushed += unsafe_copy(pending_0, buf);
+                }
+                if pending_1.len() > 0 {
+                    flushed += unsafe_copy(pending_1, &mut buf[flushed..]);
+                }
+                flushed
+            };
 
             if flushed == self.pending_data.len() {
                 self.pending_data.clear();
                 self.advance_incoming_buffer();
             } else {
-                self.pending_data = self.pending_data[flushed..].to_vec();
+                self.pending_data.drain(..flushed);
             }
 
             return flushed;
@@ -827,7 +847,7 @@ impl UtpSocket {
             if flushed == self.incoming_buffer[0].payload.len() {
                 self.advance_incoming_buffer();
             } else {
-                self.pending_data = self.incoming_buffer[0].payload[flushed..].to_vec();
+                self.pending_data.extend(self.incoming_buffer[0].payload.drain(flushed..));
             }
 
             return flushed;
