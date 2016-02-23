@@ -907,6 +907,21 @@ impl UtpSocket {
         Ok(())
     }
 
+    /// Send a keepalive packet on the stream.
+    pub fn send_keepalive(&self) {
+        if now_microseconds() - self.last_acked_timestamp > 14_000_000 {
+            let mut packet = Packet::new();
+            packet.set_type(PacketType::State);
+            let self_t_micro: u32 = now_microseconds();
+            packet.set_timestamp_microseconds(self_t_micro);
+            packet.set_timestamp_difference_microseconds(self.their_delay);
+            packet.set_connection_id(self.sender_connection_id);
+            packet.set_seq_nr(self.seq_nr);
+            packet.set_ack_nr(self.ack_nr);
+            let _ = self.socket.send_to(&packet.to_bytes()[..], self.connected_to);
+        }
+    }
+
     /// Sends every packet in the unsent packet queue.
     fn send(&mut self) -> Result<()> {
         while let Some(mut packet) = self.unsent_queue.pop_front() {
@@ -1057,15 +1072,7 @@ impl UtpSocket {
     /// received packet) in quick succession.
     fn send_fast_resend_request(&self) {
         for _ in 0..3 {
-            let mut packet = Packet::new();
-            packet.set_type(PacketType::State);
-            let self_t_micro: u32 = now_microseconds();
-            packet.set_timestamp_microseconds(self_t_micro);
-            packet.set_timestamp_difference_microseconds(self.their_delay);
-            packet.set_connection_id(self.sender_connection_id);
-            packet.set_seq_nr(self.seq_nr);
-            packet.set_ack_nr(self.ack_nr);
-            let _ = self.socket.send_to(&packet.to_bytes()[..], self.connected_to);
+            self.send_keepalive();
         }
     }
 
