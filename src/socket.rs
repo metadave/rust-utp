@@ -2,7 +2,7 @@ use std::cmp::{min, max};
 use std::collections::VecDeque;
 use std::net::{ToSocketAddrs, SocketAddr, UdpSocket};
 use std::io::{Result, Error, ErrorKind};
-use util::{now_microseconds, ewma, abs_diff, Sequence};
+use util::{now_microseconds, ewma, Sequence};
 use packet::{Packet, PacketType, Encodable, Decodable, ExtensionType, HEADER_SIZE};
 use rand::{self, Rng};
 use time::SteadyTime;
@@ -787,7 +787,7 @@ impl UtpSocket {
         let self_t_micro: u32 = now_microseconds();
         let other_t_micro: u32 = original.timestamp_microseconds();
         resp.set_timestamp_microseconds(self_t_micro);
-        resp.set_timestamp_difference_microseconds(abs_diff(self_t_micro, other_t_micro));
+        resp.set_timestamp_difference_microseconds(self_t_micro.wrapping_sub(other_t_micro));
         resp.set_connection_id(self.sender_connection_id);
         resp.set_seq_nr(self.seq_nr);
         resp.set_ack_nr(self.ack_nr);
@@ -905,6 +905,25 @@ impl UtpSocket {
         }
 
         Ok(())
+    }
+
+    fn send_state(&self) {
+        let mut packet = Packet::new();
+        packet.set_type(PacketType::State);
+        let self_t_micro: u32 = now_microseconds();
+        packet.set_timestamp_microseconds(self_t_micro);
+        packet.set_timestamp_difference_microseconds(self.their_delay);
+        packet.set_connection_id(self.sender_connection_id);
+        packet.set_seq_nr(self.seq_nr);
+        packet.set_ack_nr(self.ack_nr);
+        let _ = self.socket.send_to(&packet.to_bytes()[..], self.connected_to);
+    }
+
+    /// Send a keepalive packet on the stream.
+    pub fn send_keepalive(&self) {
+        if now_microseconds().wrapping_sub(self.last_acked_timestamp) > 14_000_000 {
+            self.send_state();
+        }
     }
 
     /// Sends every packet in the unsent packet queue.
@@ -1057,15 +1076,7 @@ impl UtpSocket {
     /// received packet) in quick succession.
     fn send_fast_resend_request(&self) {
         for _ in 0..3 {
-            let mut packet = Packet::new();
-            packet.set_type(PacketType::State);
-            let self_t_micro: u32 = now_microseconds();
-            packet.set_timestamp_microseconds(self_t_micro);
-            packet.set_timestamp_difference_microseconds(self.their_delay);
-            packet.set_connection_id(self.sender_connection_id);
-            packet.set_seq_nr(self.seq_nr);
-            packet.set_ack_nr(self.ack_nr);
-            let _ = self.socket.send_to(&packet.to_bytes()[..], self.connected_to);
+            self.send_state();
         }
     }
 
@@ -1140,7 +1151,7 @@ impl UtpSocket {
 
         // Update remote peer's delay between them sending the packet and us receiving it
         let now = now_microseconds();
-        self.their_delay = abs_diff(now, packet.timestamp_microseconds());
+        self.their_delay = now.wrapping_sub(packet.timestamp_microseconds());
         debug!("self.their_delay: {}", self.their_delay);
 
         match (self.state, packet.get_type()) {

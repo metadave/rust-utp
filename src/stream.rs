@@ -66,6 +66,11 @@ impl UtpStream {
     pub fn set_max_retransmission_retries(&mut self, n: u32) {
         self.socket.max_retransmission_retries = n;
     }
+
+    /// Try to send a keepalive packet to the peer, ensuring the connection stays active.
+    pub fn send_keepalive(&self) {
+        self.socket.send_keepalive();
+    }
 }
 
 impl Read for UtpStream {
