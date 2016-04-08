@@ -68,7 +68,7 @@ impl UtpStream {
     }
 
     /// Try to send a keepalive packet to the peer, ensuring the connection stays active.
-    pub fn send_keepalive(&self) {
+    pub fn send_keepalive(&mut self) {
         self.socket.send_keepalive();
     }
 }
