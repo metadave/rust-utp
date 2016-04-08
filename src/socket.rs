@@ -218,6 +218,9 @@ pub struct UtpSocket {
     /// The first 'State' packet we sent if we are a server (it may
     /// need to be resent if the network dropped it).
     state_packet: Option<Packet>,
+
+    /// The last time we've sent something over the wire
+    last_msg_sent_timestamp: SteadyTime,
 }
 
 impl UtpSocket {
@@ -272,6 +275,7 @@ impl UtpSocket {
             last_congestion_update: SteadyTime::now(),
             retries: 0,
             state_packet: None,
+            last_msg_sent_timestamp: SteadyTime::now(),
         }
     }
 
@@ -412,6 +416,7 @@ impl UtpSocket {
             // Send packet
             debug!("Connecting to {}", self.connected_to);
             try!(self.socket.send_to(&packet.to_bytes()[..], self.connected_to));
+            self.last_msg_sent_timestamp = SteadyTime::now();
             self.state = SocketState::SynSent;
             debug!("sent {:?}", packet);
 
@@ -442,6 +447,7 @@ impl UtpSocket {
 
                             let reply = self.prepare_reply(&packet, PacketType::State);
                             try!(self.socket.send_to(&reply.to_bytes()[..], self.connected_to));
+                            self.last_msg_sent_timestamp = SteadyTime::now();
 
                             rx_syn = Some(packet);
                         }
@@ -499,6 +505,7 @@ impl UtpSocket {
 
         // Send FIN
         try!(self.socket.send_to(&packet.to_bytes()[..], self.connected_to));
+        self.last_msg_sent_timestamp = SteadyTime::now();
         debug!("sent {:?}", packet);
         self.state = SocketState::FinSent;
 
@@ -713,6 +720,7 @@ impl UtpSocket {
         if let Some(mut pkt) = try!(self.handle_packet(&packet, src)) {
             pkt.set_wnd_size(BUF_SIZE as u32);
             try!(self.socket.send_to(&pkt.to_bytes()[..], src));
+            self.last_msg_sent_timestamp = SteadyTime::now();
             debug!("sent {:?}", pkt);
         }
 
@@ -762,6 +770,7 @@ impl UtpSocket {
 
                 // Send FIN
                 try!(self.socket.send_to(&packet.to_bytes()[..], self.connected_to));
+                self.last_msg_sent_timestamp = SteadyTime::now();
                 debug!("resent FIN: {:?}", packet);
             } else if self.state != SocketState::New {
                 // The socket is waiting for incoming packets but the remote peer is silent:
@@ -775,6 +784,7 @@ impl UtpSocket {
             let mut packet = &mut self.send_window[0];
             packet.set_timestamp_microseconds(now_microseconds());
             try!(self.socket.send_to(&packet.to_bytes()[..], self.connected_to));
+            self.last_msg_sent_timestamp = SteadyTime::now();
             debug!("resent {:?}", packet);
         }
 
@@ -907,7 +917,7 @@ impl UtpSocket {
         Ok(())
     }
 
-    fn send_state(&self) {
+    fn send_state(&mut self) {
         let mut packet = Packet::new();
         packet.set_type(PacketType::State);
         let self_t_micro: u32 = now_microseconds();
@@ -917,11 +927,13 @@ impl UtpSocket {
         packet.set_seq_nr(self.seq_nr);
         packet.set_ack_nr(self.ack_nr);
         let _ = self.socket.send_to(&packet.to_bytes()[..], self.connected_to);
+        self.last_msg_sent_timestamp = SteadyTime::now();
     }
 
     /// Send a keepalive packet on the stream.
-    pub fn send_keepalive(&self) {
-        if now_microseconds().wrapping_sub(self.last_acked_timestamp) > 14_000_000 {
+    pub fn send_keepalive(&mut self) {
+        if (SteadyTime::now() - self.last_msg_sent_timestamp).num_milliseconds()
+            >= 14_000 {
             self.send_state();
         }
     }
@@ -972,6 +984,7 @@ impl UtpSocket {
         packet.set_timestamp_microseconds(now_microseconds());
         packet.set_timestamp_difference_microseconds(self.their_delay);
         try!(self.socket.send_to(&packet.to_bytes()[..], self.connected_to));
+        self.last_msg_sent_timestamp = SteadyTime::now();
         debug!("sent {:?}", packet);
 
         Ok(())
@@ -1074,7 +1087,7 @@ impl UtpSocket {
     ///
     /// A fast resend request consists of sending three State packets (acknowledging the last
     /// received packet) in quick succession.
-    fn send_fast_resend_request(&self) {
+    fn send_fast_resend_request(&mut self) {
         for _ in 0..3 {
             self.send_state();
         }
