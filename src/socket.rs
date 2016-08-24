@@ -221,6 +221,9 @@ pub struct UtpSocket {
 
     /// The last time we've sent something over the wire
     last_msg_sent_timestamp: SteadyTime,
+
+    /// Maximum number of connection retries
+    syn_retries: u32,
 }
 
 impl UtpSocket {
@@ -276,6 +279,7 @@ impl UtpSocket {
             retries: 0,
             state_packet: None,
             last_msg_sent_timestamp: SteadyTime::now(),
+            syn_retries: MAX_SYN_RETRIES,
         }
     }
 
@@ -308,13 +312,15 @@ impl UtpSocket {
         }
     }
 
+
+
     /// Opens a connection to a remote host by hostname or IP address.
     ///
     /// The address type can be any implementer of the `ToSocketAddr` trait. See its documentation
     /// for concrete examples.
     ///
     /// If more than one valid address is specified, only the first will be used.
-    pub fn connect<A: ToSocketAddrs>(other: A) -> Result<UtpSocket> {
+    pub fn ct<A: ToSocketAddrs>(other: A, syn_retries: u32) -> Result<UtpSocket> {
         let addr = try!(take_address(other));
         let my_addr = match addr {
             SocketAddr::V4(_) => "0.0.0.0:0",
@@ -322,6 +328,7 @@ impl UtpSocket {
         };
         let mut socket = try!(UtpSocket::bind(my_addr));
         socket.connected_to = addr;
+        socket.syn_retries = syn_retries;
 
         let mut packet = Packet::new();
         packet.set_type(PacketType::Syn);
@@ -332,7 +339,7 @@ impl UtpSocket {
         let mut syn_timeout = socket.congestion_timeout;
         let mut syn_retries = 0;
 
-        while syn_retries < MAX_SYN_RETRIES {
+        while syn_retries < socket.syn_retries {
             packet.set_timestamp_microseconds(now_microseconds());
 
             // Send packet
@@ -374,6 +381,16 @@ impl UtpSocket {
         }
 
         Err(Error::from(SocketError::ConnectionTimedOut))
+    }
+
+    /// Connect using the default # of SYN retries
+    pub fn connect<A: ToSocketAddrs>(other: A) -> Result<UtpSocket> {
+        Self::ct(other, MAX_SYN_RETRIES)
+    }
+
+    /// Connect with custom options
+    pub fn connect_with_options<A: ToSocketAddrs>(other: A, syn_retries: u32) -> Result<UtpSocket> {
+        Self::ct(other, syn_retries)
     }
 
     /// If you have already prepared UDP sockets at each end (e.g. you're doing
