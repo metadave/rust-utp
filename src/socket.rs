@@ -320,7 +320,7 @@ impl UtpSocket {
     /// for concrete examples.
     ///
     /// If more than one valid address is specified, only the first will be used.
-    pub fn ct<A: ToSocketAddrs>(other: A, syn_retries: u32) -> Result<UtpSocket> {
+    pub fn ct<A: ToSocketAddrs>(other: A, syn_retries: u32, initial_syn_timeout: u64) -> Result<UtpSocket> {
         let addr = try!(take_address(other));
         let my_addr = match addr {
             SocketAddr::V4(_) => "0.0.0.0:0",
@@ -336,7 +336,8 @@ impl UtpSocket {
         packet.set_seq_nr(socket.seq_nr);
 
         let mut buf = [0; BUF_SIZE];
-        let mut syn_timeout = socket.congestion_timeout;
+        //let mut syn_timeout = socket.congestion_timeout;
+        let mut syn_timeout = initial_syn_timeout;
         let mut syn_retries = 0;
 
         while syn_retries < socket.syn_retries {
@@ -385,12 +386,12 @@ impl UtpSocket {
 
     /// Connect using the default # of SYN retries
     pub fn connect<A: ToSocketAddrs>(other: A) -> Result<UtpSocket> {
-        Self::ct(other, MAX_SYN_RETRIES)
+        Self::ct(other, MAX_SYN_RETRIES, INITIAL_CONGESTION_TIMEOUT)
     }
 
     /// Connect with custom options
-    pub fn connect_with_options<A: ToSocketAddrs>(other: A, syn_retries: u32) -> Result<UtpSocket> {
-        Self::ct(other, syn_retries)
+    pub fn connect_with_options<A: ToSocketAddrs>(other: A, syn_retries: u32, syn_timeout: u64) -> Result<UtpSocket> {
+        Self::ct(other, syn_retries, syn_timeout)
     }
 
     /// If you have already prepared UDP sockets at each end (e.g. you're doing
